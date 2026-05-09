@@ -13,7 +13,7 @@ A compact, encoder-based guard model that frames LLM moderation as multi-task cl
 
 ## Overview
 
-GLiGuard is a safety classifier built on the [GLiNER2](https://github.com/fastino-ai/GLiNER2) interface. Rather than generating verdicts autoregressively, it encodes task names and candidate labels as part of the input schema, then scores every requested moderation dimension in one non-autoregressive forward pass. A single call can evaluate prompt safety, response safety, refusal behavior, harm categories, and jailbreak strategies simultaneously.
+GLiGuard is a safety classifier built on the [GLiNER2](https://github.com/fastino-ai/GLiNER2) interface. Rather than generating verdicts autoregressively, it encodes task names and candidate labels as part of the input schema, then scores every requested moderation dimension in one non-autoregressive forward pass. A single call can evaluate prompt safety, response safety, refusal behavior, harm categories, and jailbreak strategies simultaneously — with toxicity and jailbreak tasks supporting multi-label output.
 
 The released checkpoint is `fastino/gliguard-LLMGuardrails-300M`, a 0.3B-parameter model designed for fast local inference.
 
@@ -30,16 +30,18 @@ The released checkpoint is `fastino/gliguard-LLMGuardrails-300M`, a 0.3B-paramet
 
 GLiGuard covers the full moderation lifecycle of an LLM interaction:
 
-| Task family | Task | Purpose |
-| --- | --- | --- |
-| Prompt-side | `prompt_safety` | Binary safe/unsafe classification before generation |
-| Prompt-side | `prompt_toxicity` | Fine-grained harm categorization of prompts |
-| Prompt-side | `jailbreak_detection` | Detection of jailbreak or prompt attack strategies |
-| Response-side | `response_safety` | Binary safe/unsafe classification of a model answer |
-| Response-side | `response_toxicity` | Fine-grained harm categorization of responses |
-| Response-side | `response_refusal` | Detects refusal vs compliance |
+| Task family | Task | Type | Purpose |
+| --- | --- | --- | --- |
+| Prompt-side | `prompt_safety` | single-label | Binary safe/unsafe classification before generation |
+| Prompt-side | `prompt_toxicity` | multi-label | Fine-grained harm categorization of prompts |
+| Prompt-side | `jailbreak_detection` | multi-label | Detection of jailbreak or prompt attack strategies |
+| Response-side | `response_safety` | single-label | Binary safe/unsafe classification of a model answer |
+| Response-side | `response_toxicity` | multi-label | Fine-grained harm categorization of responses |
+| Response-side | `response_refusal` | single-label | Detects refusal vs compliance |
 
-A prompt is considered unsafe when `prompt_safety` predicts `unsafe`, **or** when `prompt_toxicity` / `jailbreak_detection` predict a non-benign label. See [Decision rules](#decision-rules-used-in-benchmarks) for full aggregation logic.
+Tasks marked multi-label can return multiple active labels per input (e.g. a prompt may combine both `non_violent_crime` and `privacy_violation`). Single-label tasks return exactly one prediction.
+
+A prompt is considered unsafe when `prompt_safety` predicts `unsafe`, **or** when `prompt_toxicity` / `jailbreak_detection` predict any non-benign label. See [Decision rules](#decision-rules-used-in-benchmarks) for full aggregation logic.
 
 ## Installation
 
@@ -113,12 +115,12 @@ JAILBREAK_LABELS = [
 
 These constants map to specific tasks as follows:
 
-- `prompt_safety` / `response_safety` → `SAFETY_LABELS`
-- `prompt_toxicity` / `response_toxicity` → `TOXICITY_LABELS`
-- `jailbreak_detection` → `JAILBREAK_LABELS`
-- `response_refusal` → `REFUSAL_LABELS`
+- `prompt_safety` / `response_safety` → `SAFETY_LABELS` (single-label)
+- `prompt_toxicity` / `response_toxicity` → `TOXICITY_LABELS` (multi-label)
+- `jailbreak_detection` → `JAILBREAK_LABELS` (multi-label)
+- `response_refusal` → `REFUSAL_LABELS` (single-label)
 
-You can request any single task in isolation or compose multiple tasks into one schema.
+Single-label tasks return a string; multi-label tasks return a list of all labels whose score exceeds the threshold. You can request any single task in isolation or compose multiple tasks into one schema.
 
 ## Prompt-side examples
 
@@ -141,7 +143,7 @@ print(result)
 
 ### Prompt toxicity
 
-Identify the specific harm category of a prompt:
+Identify harm categories in a prompt (multi-label — may return more than one):
 
 ```python
 result = model.classify_text(
@@ -149,12 +151,12 @@ result = model.classify_text(
     {"prompt_toxicity": TOXICITY_LABELS},
 )
 print(result)
-# {"prompt_toxicity": "non_violent_crime"}
+# {"prompt_toxicity": ["non_violent_crime"]}
 ```
 
 ### Jailbreak detection
 
-Detect jailbreak strategy patterns:
+Detect jailbreak strategy patterns (multi-label — a single prompt can use multiple strategies):
 
 ```python
 prompt = (
@@ -167,7 +169,7 @@ result = model.classify_text(
     {"jailbreak_detection": JAILBREAK_LABELS},
 )
 print(result)
-# {"jailbreak_detection": "system_prompt_exfiltration"}
+# {"jailbreak_detection": ["instruction_override", "system_prompt_exfiltration"]}
 ```
 
 ### Combined prompt moderation
@@ -192,8 +194,8 @@ result = model.classify_text(
 print(result)
 # {
 #     "prompt_safety": "unsafe",
-#     "prompt_toxicity": "privacy_violation",
-#     "jailbreak_detection": "instruction_override",
+#     "prompt_toxicity": ["privacy_violation"],
+#     "jailbreak_detection": ["instruction_override", "data_exfiltration"],
 # }
 ```
 
@@ -221,7 +223,7 @@ print(result)
 
 ### Response toxicity
 
-Identify the harm category of a response, optionally including the prompt for context:
+Identify harm categories in a response (multi-label), optionally including the prompt for context:
 
 ```python
 prompt = "How do I steal customer account credentials?"
@@ -233,7 +235,7 @@ result = model.classify_text(
     {"response_toxicity": TOXICITY_LABELS},
 )
 print(result)
-# {"response_toxicity": "non_violent_crime"}
+# {"response_toxicity": ["non_violent_crime", "privacy_violation"]}
 ```
 
 ### Response refusal
@@ -276,7 +278,7 @@ result = model.classify_text(
 print(result)
 # {
 #     "response_safety": "unsafe",
-#     "response_toxicity": "child_safety",
+#     "response_toxicity": ["child_safety", "non_violent_crime"],
 #     "response_refusal": "compliance",
 # }
 ```
@@ -312,7 +314,7 @@ print(results)
 
 The benchmark evaluation scripts combine task outputs into final verdicts using the following aggregation logic:
 
-**Prompt aggregation.** A prompt is flagged unsafe if `prompt_safety` predicts `unsafe`, or if `prompt_toxicity` / `jailbreak_detection` predict any non-benign label.
+**Prompt aggregation.** A prompt is flagged unsafe if `prompt_safety` predicts `unsafe`, or if `prompt_toxicity` / `jailbreak_detection` return any non-benign label in their output list.
 
 **Response aggregation.** A response is flagged unsafe if `response_safety` predicts `unsafe` and `response_refusal` does not predict `refusal`. Refusal overrides unsafe behavior in evaluation, matching the benchmark semantics.
 
