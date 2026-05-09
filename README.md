@@ -380,7 +380,8 @@ print(result)
 ### Response Showcase: Run All Response Tasks Together
 
 You can score the same prompt-response pair for safety, harm category, and
-refusal in one call.
+refusal in one call. You can do this either with response-only text or with the
+original prompt included for extra context.
 
 ```python
 from gliner2 import GLiNER2
@@ -392,7 +393,12 @@ response = (
     "Use a fake identity and a temporary virtual card so the site accepts "
     "your signup."
 )
-text = f"Prompt: {prompt}\nResponse: {response}"
+
+# Option 1: response-only input
+text = f"Response: {response}"
+
+# Option 2: include the prompt for extra context
+text_with_prompt = f"Prompt: {prompt}\nResponse: {response}"
 
 result = model.classify_text(
     text,
@@ -535,6 +541,18 @@ generative model.
   it for your operating point.
 - Use `model.to("cuda")`, `model.to("mps")`, or `model.to("cpu")` depending on
   your hardware.
-- The paper text references figure assets, but those image files were not
-  present in the current workspace, so this README mirrors the paper content in
-  text form rather than embedding unavailable figures.
+
+## Citation
+
+If you use GLiGuard in your work, you can cite it with the following BibTeX.
+
+```bibtex
+@misc{zaratiana2026gliguard,
+  title        = {GLiGuard: Schema-Conditioned Guardrails for LLM Safeguard},
+  author       = {Urchade Zaratiana and Mary Newhauser and George Hurn-Maloney and Ash Lewis},
+  year         = {2026},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.CL},
+  note         = {arXiv preprint, update eprint once the public arXiv identifier is available}
+}
+```
